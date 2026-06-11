@@ -2247,7 +2247,7 @@ async function initOllamaBrain(){
     updateOllamaPanel({...d.last,stats:d.stats,health:d.health});
   }catch(e){}
   setTimeout(pollHermesBrain,3000);
-  setInterval(pollHermesBrain,10000);
+  setInterval(pollHermesBrain,60000);
   setInterval(()=>fetch('/hermes_keep_warm',{method:'POST'}),90000);
 }
 initOllamaBrain();

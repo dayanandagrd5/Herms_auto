@@ -36,8 +36,12 @@ Previous v6 changes (all retained):
   • NRML LIMIT orders, Hermes learning loop
 """
 
+import sys
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 # ── Imports ────────────────────────────────────────────────────────────────────
-from Herms_auto.hermes_brain import (
+from hermes_brain import (
     startup, hermes_analyse, get_last_output, get_brain_stats,
     check_ollama_health, update_decision_outcome, build_market_prompt,
     call_hermes3, warmup, resolve_fut_token, fetch_futures_volume,
@@ -54,7 +58,7 @@ import pytz, threading, time, logging
 from kiteconnect import KiteConnect
 
 log = logging.getLogger("flux_913ema")
-from Herms_auto.Auto_toptp_Engine import initialize_kite_session
+from Auto_toptp_Engine import initialize_kite_session
 
 app  = Flask(__name__, static_folder="static", template_folder="templates")
 kite: KiteConnect = initialize_kite_session()
@@ -189,47 +193,38 @@ def is_index_tradeable(cfg_key: str) -> tuple[bool, str]:
 
 
 # ── Quantity Calculator (funds-based) ─────────────────────────────────────────
-# Uses available margin from Kite to decide how many lots to trade.
-# Margin per lot for each index is fetched from the premium; a conservative
-# estimate of ≈ 1.2× option_premium × lot_size is used as required margin.
-# Falls back to a fixed % of funds divided by a per-lot margin estimate.
+# Sizes the trade directly off the live ATM option premium and the account's
+# real-time available cash (margins("equity").available.live_balance):
+#     usable_cash = live_balance * _USABLE_FUNDS_PCT
+#     lots        = floor(usable_cash / (option_ltp * lot_size))
+# Returns 0 if even 1 lot can't be afforded — caller must skip the trade.
 
-_MARGIN_PCT = 0.25        # allocate up to 25% of available funds per trade
-_MARGIN_FLOOR = {         # minimum ₹ per lot safety floor (worst-case estimate)
-    "NIFTY":      3_000,
-    "BANKNIFTY":  4_000,
+_USABLE_FUNDS_PCT = 0.90  # allocate up to 90% of live available balance per trade
+_MARGIN_FLOOR = {         # used only by _can_afford_all_today() below as a
+    "NIFTY":      3_000,  # coarse worst-case per-lot estimate for the daily
+    "BANKNIFTY":  4_000,  # multi-index affordability pre-check.
     "SENSEX":     3_500,
 }
 
 
 def calculate_lots(cfg_key: str, lot_size: int, option_ltp: float = 0.0) -> int:
     """
-    Compute how many lots to trade based on available funds.
-
-    margin_per_lot = max(
-        option_ltp * lot_size * 1.2,   # dynamic: 120% of option premium
-        _MARGIN_FLOOR[cfg_key]          # safety floor
-    )
-    lots = floor(available_funds * _MARGIN_PCT / margin_per_lot)
-    Minimum 1 lot; maximum 10 lots (safety cap).
+    Compute how many lots to trade based on live available funds and the
+    actual ATM option premium. Returns 0 if even 1 lot can't be afforded.
     """
     try:
-        m     = kite.margins()
-        eq    = m.get("equity", {})
-        av    = eq.get("available", {})
-        funds = av.get("cash", 0) + av.get("collateral", 0) + av.get("intraday_payin", 0)
+        cash = kite.margins("equity")["available"]["live_balance"]
     except Exception as e:
         print(f"[QTY CALC] Could not fetch margins: {e} — defaulting to 1 lot")
         return 1
 
-    floor_margin   = _MARGIN_FLOOR.get(cfg_key, 4_000)
-    dynamic_margin = option_ltp * lot_size * 1.2 if option_ltp > 0 else 0
-    margin_per_lot = max(floor_margin, dynamic_margin)
+    if option_ltp <= 0 or lot_size <= 0:
+        print(f"[QTY CALC] {cfg_key}: missing ltp/lot_size — defaulting to 1 lot")
+        return 1
 
-    allocatable = funds * _MARGIN_PCT
-    lots = int(allocatable // margin_per_lot)
-    lots = max(1, min(lots, 10))          # clamp 1–10
-    print(f"[QTY CALC] {cfg_key}: funds=₹{funds:,.0f} margin/lot=₹{margin_per_lot:,.0f} "
+    usable_cash = cash * _USABLE_FUNDS_PCT
+    lots = int(usable_cash // (option_ltp * lot_size))
+    print(f"[QTY CALC] {cfg_key}: cash=₹{cash:,.0f} ltp={option_ltp} lot_size={lot_size} "
           f"→ {lots} lot(s)")
     return lots
 
@@ -386,8 +381,8 @@ def _get_available_funds() -> float:
     try:
         m  = kite.margins()
         eq = m.get("equity", {})
-        av = eq.get("available", {})
-        return av.get("cash", 0) + av.get("collateral", 0) + av.get("intraday_payin", 0)
+        # "net" (== available.live_balance) is the real-time usable balance.
+        return eq.get("net", 0)
     except Exception:
         return 0.0
 
@@ -796,13 +791,15 @@ def get_atm_option(underlying: str, spot: float, direction: str) -> dict | None:
         i for i in insts
         if i.get("name", "").upper() == cfg_key
         and i.get("instrument_type") == opt_type
-        and i.get("strike") == atm
         and i.get("expiry") and i["expiry"] >= today
     ]
     if not cands:
         return None
-    cands.sort(key=lambda x: x["expiry"])
-    inst = cands[0]
+    nearest_expiry = min(c["expiry"] for c in cands)
+    cands = [c for c in cands if c["expiry"] == nearest_expiry]
+    # Nearest available strike to the computed ATM — handles any gaps or
+    # odd strike steps instead of requiring an exact match.
+    inst = min(cands, key=lambda c: abs((c.get("strike") or 0) - atm))
     # Always use master lot_size — NEVER fall back to a hardcoded number
     lot_size = int(inst.get("lot_size") or 0)
     if lot_size <= 0:
@@ -814,7 +811,7 @@ def get_atm_option(underlying: str, spot: float, direction: str) -> dict | None:
         "instrument_token": int(inst["instrument_token"]),
         "lot_size":         lot_size,
         "exchange":         cfg["exchange"],
-        "strike":           atm,
+        "strike":           inst.get("strike", atm),
         "opt_type":         opt_type,
         "expiry":           str(inst["expiry"]),
     }
@@ -1820,6 +1817,10 @@ def trade_endpoint():
     except Exception:
         opt_ltp = 0.0
     lots = calculate_lots(cfg_key, opt["lot_size"], opt_ltp)
+    if lots <= 0:
+        return jsonify({"status": "error",
+                         "msg": f"Insufficient funds for 1 lot of {opt['tradingsymbol']} "
+                                f"(premium={opt_ltp}, lot_size={opt['lot_size']})"})
 
     oid = place_order(opt, lots, "BUY", limit_price=round(opt_ltp * 1.005, 1) if opt_ltp > 0 else 0)
     if not oid:
@@ -1954,7 +1955,9 @@ def account_ep():
         av     = eq.get("available", {})
         cash   = av.get("cash", 0)
         collat = av.get("collateral", 0)
-        total  = cash + collat + av.get("intraday_payin", 0)
+        # "net" (== available.live_balance) is the real-time usable balance —
+        # cash/collateral above are start-of-day figures shown for reference.
+        total  = eq.get("net", 0)
     except Exception:
         cash = collat = total = 0
     cfg_key = _index_key(symbol)
@@ -1964,23 +1967,25 @@ def account_ep():
         spot  = float(list(kite.ltp([ALIAS.get(symbol, f"NSE:{symbol}")]).values())[0]["last_price"])
     except Exception:
         pass
-    # lot_size from master (best-effort, cached)
+    # ATM option (CE side) — correct strike + lot_size (from master) + live
+    # premium, used for fund-based lot sizing below.
     lot_size_master = 0
+    opt_ltp     = 0.0
+    atm_strike  = None
+    atm_symbol  = None
     try:
-        cfg = OPTIONS_CFG.get(cfg_key, {})
-        insts = _get_instruments(cfg.get("exchange", "NFO"))
-        today = datetime.now(IST).date()
-        cands = [i for i in insts
-                 if i.get("name","").upper() == cfg_key
-                 and i.get("expiry") and i["expiry"] >= today]
-        if cands:
-            cands.sort(key=lambda x: x["expiry"])
-            lot_size_master = int(cands[0].get("lot_size") or 0)
+        opt = get_atm_option(symbol, spot, "BUY") if spot > 0 else None
+        if opt:
+            lot_size_master = opt["lot_size"]
+            atm_strike      = opt["strike"]
+            atm_symbol      = opt["tradingsymbol"]
+            ltp_raw = kite.ltp([f"{opt['exchange']}:{opt['tradingsymbol']}"])
+            opt_ltp = float(list(ltp_raw.values())[0]["last_price"])
     except Exception:
         pass
 
-    # Suggested lots using fund-based calculation
-    lots = calculate_lots(cfg_key, lot_size_master if lot_size_master > 0 else 1)
+    # Suggested lots using fund-based calculation (uses live ATM premium)
+    lots = calculate_lots(cfg_key, lot_size_master if lot_size_master > 0 else 1, opt_ltp)
 
     # Calendar status
     tradeable, cal_reason = is_index_tradeable(cfg_key)
@@ -1992,6 +1997,9 @@ def account_ep():
         "suggested_lots":   lots,
         "spot":             round(spot, 2),
         "lot_size":         lot_size_master,
+        "atm_strike":       atm_strike,
+        "atm_symbol":       atm_symbol,
+        "atm_premium":      round(opt_ltp, 2),
         "calendar_allowed": tradeable,
         "calendar_reason":  cal_reason,
     })
@@ -2270,6 +2278,10 @@ def _run_auto_trade(symbol: str, interval: str, sig: dict, lots: int):
     except Exception:
         opt_ltp = 0.0
     computed_lots = calculate_lots(cfg_key, opt["lot_size"], opt_ltp)
+    if computed_lots <= 0:
+        print(f"[Hermes AUTO] Insufficient funds for {symbol} {opt['tradingsymbol']} "
+              f"(premium={opt_ltp}, lot_size={opt['lot_size']}) — skipping trade")
+        return
 
     limit_px = round(opt_ltp * 1.005, 1) if opt_ltp > 0 else 0.0
     oid = place_order(opt, computed_lots, "BUY", limit_price=limit_px)
@@ -2485,7 +2497,7 @@ def hermes_force_learn():
         _hermes_state = {"patterns": {}, "totalTrades": 0, "wins": 0, "seenSignalKeys": []}
     # Reset SQLite memory via hermes_brain
     try:
-        import Herms_auto.hermes_brain as hb
+        import hermes_brain as hb
         import sqlite3
         con = sqlite3.connect(hb.DB_PATH)
         cur = con.cursor()
