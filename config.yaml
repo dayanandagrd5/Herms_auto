@@ -1,0 +1,100 @@
+# config.yaml — Hermes Trading System Configuration
+
+# ── Zerodha Kite API ──────────────────────────────────────────
+kite:
+  api_key: "fn64pt9fkpu6x9w9"
+  api_secret: "h26gqek7udiz4i2emoih7ybhrm2phy7y"
+  user_id: "ZGP218"       # e.g. "AB1234"
+  password: "Y@shas!2001"
+  totp_secret: "BYA7XWCNXCWLA4GQ6K5SMH2ZVHONWG5Z"
+  redirect_url: "http://127.0.0.1:5000/callback"
+
+# ── Ollama / Hermes LLM ───────────────────────────────────────
+ollama:
+  host: "http://localhost:11434"
+  model: "hermes3"
+  timeout: 30
+  temperature: 0.1
+  num_ctx: 4096
+
+# ── Instruments ───────────────────────────────────────────────
+# expiry_day is intentionally omitted — derived live from Kite master instruments file
+instruments:
+  NIFTY:
+    exchange: "NFO"
+    index_exchange: "NSE"
+    index_symbol: "NIFTY 50"
+    lot_size: 75
+    tick_size: 0.05
+    strike_gap: 50
+  BANKNIFTY:
+    exchange: "NFO"
+    index_exchange: "NSE"
+    index_symbol: "NIFTY BANK"
+    lot_size: 15
+    tick_size: 0.05
+    strike_gap: 100
+  SENSEX:
+    exchange: "BFO"
+    index_exchange: "BSE"
+    index_symbol: "SENSEX"
+    lot_size: 20
+    tick_size: 0.05
+    strike_gap: 100
+
+# ── Strategy Parameters ───────────────────────────────────────
+strategy:
+  timeframes:
+    - "5minute"
+    - "15minute"
+    - "60minute"
+  indicators:
+    atr_period: 14
+    bb_period: 20
+    bb_std: 2.0
+    rsi_period: 14
+    ema_fast: 9
+    ema_slow: 21
+    volume_ma_period: 20
+  probability_threshold: 75
+  high_conviction_threshold: 85
+  max_concurrent_positions: 3
+  max_lots_per_signal: 3
+
+# ── Risk Management ───────────────────────────────────────────
+risk:
+  capital: 500000
+  max_daily_loss_pct: 2.0
+  max_daily_loss_inr: 10000
+  stop_loss_pct: 30
+  target_pct_1: 60
+  target_pct_2: 100
+
+# ── Timing Rules ─────────────────────────────────────────────
+timing:
+  market_open: "09:15"
+  no_trade_before: "09:30"
+  no_new_entry_after: "14:45"
+  square_off_time: "15:15"
+  timezone: "Asia/Kolkata"
+
+# ── Logging ──────────────────────────────────────────────────
+logging:
+  level: "INFO"
+  log_file: "logs/hermes.log"
+  trade_log: "logs/trades.csv"
+
+# ── Kite Developer Portal credentials ────────────────────────
+# Used by ip_update.py to auto-update your whitelisted IP on developers.kite.trade
+# NOTE: these are your DEVELOPER PORTAL login (developers.kite.trade),
+#       NOT your Zerodha trading login.
+kite_dev:
+  username: "dayananda.pallavi@gmail.com"
+  password: "Y@shas!2001"
+
+# ── Runtime State (auto-managed by ip_update.py) ─────────────
+# last_known_ip is updated automatically — do not edit manually
+runtime:
+  last_known_ip: "106.51.193.163
+2406:7400:104:7069:49f5:66c3:4dc5:3ef0"
+2406:7400:104:7069:49f5:66c3:4dc5:3ef0"
