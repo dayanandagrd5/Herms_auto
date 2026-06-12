@@ -4,7 +4,7 @@
 kite:
   api_key: "fn64pt9fkpu6x9w9"
   api_secret: "h26gqek7udiz4i2emoih7ybhrm2phy7y"
-  user_id: "ZGP218"       # e.g. "AB1234"
+  user_id: "ZGP218"
   password: "Y@shas!2001"
   totp_secret: "BYA7XWCNXCWLA4GQ6K5SMH2ZVHONWG5Z"
   redirect_url: "http://127.0.0.1:5000/callback"
@@ -18,7 +18,6 @@ ollama:
   num_ctx: 4096
 
 # ── Instruments ───────────────────────────────────────────────
-# expiry_day is intentionally omitted — derived live from Kite master instruments file
 instruments:
   NIFTY:
     exchange: "NFO"
@@ -85,16 +84,11 @@ logging:
   trade_log: "logs/trades.csv"
 
 # ── Kite Developer Portal credentials ────────────────────────
-# Used by ip_update.py to auto-update your whitelisted IP on developers.kite.trade
-# NOTE: these are your DEVELOPER PORTAL login (developers.kite.trade),
-#       NOT your Zerodha trading login.
 kite_dev:
   username: "dayananda.pallavi@gmail.com"
   password: "Y@shas!2001"
 
 # ── Runtime State (auto-managed by ip_update.py) ─────────────
-# last_known_ip is updated automatically — do not edit manually
 runtime:
-  last_known_ip: "106.51.193.163
-2406:7400:104:7069:49f5:66c3:4dc5:3ef0"
-2406:7400:104:7069:49f5:66c3:4dc5:3ef0"
+  last_known_ip: "106.51.193.163\n2406:7400:104:7069:8d5:a135:8959:e5d"
+

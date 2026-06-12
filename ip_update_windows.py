@@ -34,8 +34,6 @@ import concurrent.futures
 from pathlib import Path
 
 from selenium import webdriver
-from selenium.webdriver.edge.service import Service as EdgeService
-from selenium.webdriver.edge.options import Options as EdgeOptions
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
@@ -44,8 +42,8 @@ from selenium.common.exceptions import TimeoutException, WebDriverException
 
 log = logging.getLogger("ip_update")
 
-BASE_DIR        = Path(__file__).resolve().parent
-CONFIG_FILE     = BASE_DIR / "config.yaml"
+BASE_DIR         = Path(__file__).resolve().parent
+CONFIG_FILE      = BASE_DIR / "config.yaml"
 EDGE_DRIVER_PATH = BASE_DIR / "msedgedriver.exe"
 
 LOGIN_URL   = "https://developers.kite.trade/login"
@@ -62,8 +60,12 @@ def load_config() -> dict:
 def save_last_known_ip(ip: str):
     """
     Updates ONLY the runtime.last_known_ip line in config.yaml.
-    Does a targeted line replacement — all comments and formatting are preserved.
+    Stores multi-line IPs as a \\n-escaped string so YAML stays valid.
+    All comments and formatting in the rest of the file are preserved.
     """
+    # Encode real newlines as \n so the value stays on one YAML line
+    ip_escaped = ip.replace("\n", "\\n")
+
     with open(CONFIG_FILE, "r", encoding="utf-8") as f:
         lines = f.readlines()
 
@@ -82,14 +84,14 @@ def save_last_known_ip(ip: str):
 
         # Inside runtime block — replace the last_known_ip line
         if in_runtime and stripped.lstrip().startswith("last_known_ip:"):
-            new_lines.append('  last_known_ip: "{}"\n'.format(ip))
+            new_lines.append('  last_known_ip: "{}"\n'.format(ip_escaped))
             ip_written = True
             in_runtime = False
             continue
 
         # Left the runtime block without finding last_known_ip — inject it
         if in_runtime and stripped != "" and not stripped.startswith(" "):
-            new_lines.append('  last_known_ip: "{}"\n'.format(ip))
+            new_lines.append('  last_known_ip: "{}"\n'.format(ip_escaped))
             ip_written = True
             in_runtime = False
 
@@ -100,7 +102,7 @@ def save_last_known_ip(ip: str):
         new_lines.append("\n")
         new_lines.append("# -- Runtime State (auto-managed by ip_update.py) --\n")
         new_lines.append("runtime:\n")
-        new_lines.append('  last_known_ip: "{}"\n'.format(ip))
+        new_lines.append('  last_known_ip: "{}"\n'.format(ip_escaped))
 
     with open(CONFIG_FILE, "w", encoding="utf-8") as f:
         f.writelines(new_lines)
@@ -146,9 +148,12 @@ def get_current_ips() -> str:
     return combined
 
 
-# ── Edge driver (Windows) ────────────────────────────────────────────────────
+# ── Edge driver (Windows) ─────────────────────────────────────────────────────
 
 def _build_edge_driver() -> webdriver.Edge:
+    from selenium.webdriver.edge.service import Service as EdgeService
+    from selenium.webdriver.edge.options import Options as EdgeOptions
+
     options = EdgeOptions()
     options.use_chromium = True
     options.add_argument("--no-sandbox")
@@ -195,7 +200,7 @@ def _build_safari_driver() -> webdriver.Safari:
         ) from e
 
 
-# ── Driver factory — picks browser based on the host OS ───────────────────────
+# ── Driver factory — picks browser based on the host OS ──────────────────────
 
 def _build_driver():
     system = platform.system()
@@ -360,8 +365,10 @@ def ensure_ip_whitelisted() -> bool:
     current_ips = get_current_ips()
 
     # Compare with last known IP stored in config.yaml
-    runtime     = cfg.get("runtime") or {}
-    last_ips    = str(runtime.get("last_known_ip") or "")
+    # Decode \n escape back to real newlines when reading
+    runtime  = cfg.get("runtime") or {}
+    last_ips = str(runtime.get("last_known_ip") or "").replace("\\n", "\n")
+
     current_set = set(ln.strip() for ln in current_ips.splitlines() if ln.strip())
     last_set    = set(ln.strip() for ln in last_ips.splitlines()    if ln.strip())
 
@@ -410,7 +417,9 @@ def main():
 
 if __name__ == "__main__":
     main()
-# -- Background scheduler -- call this from your production app ----------------
+
+
+# ── Background scheduler — call this from your production app ─────────────────
 
 def start_ip_watcher():
     import time
@@ -420,23 +429,23 @@ def start_ip_watcher():
         while True:
             try:
                 cfg      = load_config()
-                interval = int(cfg.get('ip_update', {}).get('check_interval_minutes', 15))
+                interval = int(cfg.get("ip_update", {}).get("check_interval_minutes", 15))
             except Exception:
                 interval = 15
 
             try:
                 updated = ensure_ip_whitelisted()
                 if updated:
-                    log.info('[IP WATCHER] IP changed -- portal and config.yaml updated')
+                    log.info("[IP WATCHER] IP changed — portal and config.yaml updated")
                 else:
-                    log.info('[IP WATCHER] No change -- already up-to-date')
+                    log.info("[IP WATCHER] No change — already up-to-date")
             except Exception as e:
-                log.error('[IP WATCHER] Error: %s -- will retry in %d min', e, interval)
+                log.error("[IP WATCHER] Error: %s — will retry in %d min", e, interval)
 
-            log.info('[IP WATCHER] Next check in %d minute(s)', interval)
+            log.info("[IP WATCHER] Next check in %d minute(s)", interval)
             time.sleep(interval * 60)
 
-    t = threading.Thread(target=_watch_loop, name='ip-watcher', daemon=True)
+    t = threading.Thread(target=_watch_loop, name="ip-watcher", daemon=True)
     t.start()
-    log.info('[IP WATCHER] Started')
+    log.info("[IP WATCHER] Started")
     return t

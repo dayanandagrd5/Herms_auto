@@ -1343,6 +1343,7 @@ function buildLayout(data, upToIdx) {
   const lp  = lastPriceShapes(data, ts);
   return {
     dragmode:'pan',showlegend:false,
+    uirevision:'flux-main-chart',
     paper_bgcolor:C.paper,plot_bgcolor:C.bg,
     margin:{t:4,b:0,l:4,r:60},
     xaxis:{type:'date',rangeslider:{visible:false},
@@ -1393,10 +1394,20 @@ function bindHover(data) {
 // ═══════════════════════════════════════════════════════════════════════
 // PLOT
 // ═══════════════════════════════════════════════════════════════════════
+// How many candles to show by default on first load (zoomed-in "big candle" view).
+// User can still pan/scroll back through the full CHART_DAYS history.
+const VISIBLE_CANDLES = 60;
+
 function plotChart(data, upToIdx) {
   const traces = buildTraces(data, upToIdx);
   const layout = buildLayout(data, upToIdx);
   if(!chartInited) {
+    const n  = upToIdx!=null ? upToIdx+1 : data.timestamps.length;
+    const ts = data.timestamps.slice(0,n);
+    if(ts.length>1) {
+      const startIdx = Math.max(0, ts.length-VISIBLE_CANDLES);
+      layout.xaxis.range = [ts[startIdx], ts[ts.length-1]];
+    }
     Plotly.newPlot(mainChart, traces, layout,
       {responsive:true,displaylogo:false,scrollZoom:true,
        modeBarButtonsToRemove:['toImage','sendDataToCloud','lasso2d','select2d']});
