@@ -38,7 +38,7 @@ INDEX_QUOTE = "BSE:SENSEX"
 TIMEFRAME = "5minute"
 
 start_time = datetime.strptime("09:30:00", "%H:%M:%S").time()
-end_time = datetime.strptime("15:30:00", "%H:%M:%S").time()
+end_time = datetime.strptime("23:30:00", "%H:%M:%S").time()
 exit_time = datetime.strptime("15:15:00", "%H:%M:%S").time()
 
 RSI_LENGTH = 9
@@ -482,6 +482,11 @@ while True:
     current_time = datetime.now().time()
     print("Running main loop... and current time is ",current_time)
     start_ip_watcher()
+
+    if datetime.now().weekday() not in (1, 2):  # Tue=1, Wed=2
+        cprint("Not Tuesday/Wednesday. Not trading today, skipping...", Fore.YELLOW)
+        time.sleep(5)
+        continue
 
     if current_time >= start_time and current_time <= end_time and is_expiry_today(master, INDEX):
         cprint("DTE = 0 (Expiry day). Not trading today, skipping...", Fore.YELLOW)

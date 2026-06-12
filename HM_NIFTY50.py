@@ -474,8 +474,12 @@ while True:
     current_time = datetime.now().time()
     print("Running main loop... and current time is ",current_time)
     start_ip_watcher()
-    
-        
+
+    if datetime.now().weekday() not in (0, 3, 4):  # Mon=0, Thu=3, Fri=4
+        cprint("Not Monday/Thursday/Friday. Not trading today, skipping...", Fore.YELLOW)
+        time.sleep(5)
+        continue
+
     if current_time >= start_time and current_time <= end_time:
             cprint("Market is open. Scanning for signals...", Fore.GREEN)
             
