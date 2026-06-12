@@ -270,15 +270,19 @@ def check_ollama_health() -> dict:
 
 
 def warmup():
-    """Send a tiny prompt to load the model into GPU memory."""
+    """
+    Send a tiny prompt to load the model into memory and keep it there.
+    Called once at startup, then re-called periodically via /hermes_keep_warm
+    so Ollama's keep_alive timer never lapses and hermes3 stays resident.
+    """
     global _warmup_done
-    if _warmup_done:
-        return
-    log.info("[Hermes] Warming up %s…", HERMES_MODEL)
     try:
         call_hermes3("Respond with exactly: READY", max_tokens=10, timeout=30)
-        _warmup_done = True
-        log.info("[Hermes] Model warm.")
+        if not _warmup_done:
+            _warmup_done = True
+            log.info("[Hermes] Model warm.")
+        else:
+            log.debug("[Hermes] Keep-warm ping ok.")
     except Exception as e:
         log.warning("[Hermes] Warmup failed (will retry): %s", e)
 
