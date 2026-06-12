@@ -1,9 +1,13 @@
 """
-ip_update.py — Kite Developer Portal IP updater (Windows / Edge)
+ip_update.py — Kite Developer Portal IP updater (Windows / Edge, macOS / Safari)
 ====================================================
 Logs in to developers.kite.trade with credentials from config.yaml,
 then replaces the IP-whitelist field with both current public IPs
 (IPv4 + IPv6, newline-separated, fetched in parallel).
+
+The browser driver is picked automatically based on the host OS:
+  - Windows -> Microsoft Edge (msedgedriver)
+  - macOS   -> Safari (built-in safaridriver)
 
 ONE-TIME SETUP (Windows):
 1. Check your Edge version: Edge -> Settings -> About Microsoft Edge
@@ -13,11 +17,17 @@ ONE-TIME SETUP (Windows):
    - In the same folder as this script, OR
    - In a folder that is on your system PATH
 
+ONE-TIME SETUP (macOS):
+1. Safari -> Settings -> Advanced -> enable "Show Develop menu"
+2. Develop -> Allow Remote Automation
+3. Run once in Terminal: safaridriver --enable
+
 Standalone:    python ip_update.py
 Programmatic:  from ip_update import ensure_ip_whitelisted
 """
 
 import logging
+import platform
 import yaml
 import requests
 import concurrent.futures
@@ -136,9 +146,9 @@ def get_current_ips() -> str:
     return combined
 
 
-# ── Edge driver ────────────────────────────────────────────────────────────────
+# ── Edge driver (Windows) ────────────────────────────────────────────────────
 
-def _build_driver() -> webdriver.Edge:
+def _build_edge_driver() -> webdriver.Edge:
     options = EdgeOptions()
     options.use_chromium = True
     options.add_argument("--no-sandbox")
@@ -160,6 +170,43 @@ def _build_driver() -> webdriver.Edge:
             "   https://developer.microsoft.com/en-us/microsoft-edge/tools/webdriver/\n"
             "2. Place msedgedriver.exe next to this script or on your PATH.".format(e)
         ) from e
+
+
+# ── Safari driver (macOS) ─────────────────────────────────────────────────────
+
+def _build_safari_driver() -> webdriver.Safari:
+    """
+    Safari's WebDriver ships with macOS (/usr/bin/safaridriver) — no
+    separate driver download needed. One-time setup on the Mac:
+        1. Safari -> Settings -> Advanced -> enable "Show Develop menu"
+        2. Develop -> Allow Remote Automation
+        3. Run once in Terminal: safaridriver --enable
+    Note: Safari does not support headless mode or Chromium-style options.
+    """
+    try:
+        driver = webdriver.Safari()
+        driver.set_window_size(1280, 900)
+        return driver
+    except Exception as e:
+        raise RuntimeError(
+            "Safari failed to start: {}\n"
+            "Run 'safaridriver --enable' and enable "
+            "Develop -> Allow Remote Automation in Safari, then retry.".format(e)
+        ) from e
+
+
+# ── Driver factory — picks browser based on the host OS ───────────────────────
+
+def _build_driver():
+    system = platform.system()
+    if system == "Darwin":
+        log.info("[DRIVER] macOS detected -> using Safari")
+        return _build_safari_driver()
+    if system == "Windows":
+        log.info("[DRIVER] Windows detected -> using Edge")
+        return _build_edge_driver()
+    log.warning("[DRIVER] Unrecognized OS '%s' -> defaulting to Edge", system)
+    return _build_edge_driver()
 
 
 # ── JS helpers ─────────────────────────────────────────────────────────────────

@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import time
+import platform
 import pyotp
 from datetime import date
 from urllib.parse import urlparse, parse_qs
@@ -87,7 +88,7 @@ def get_live_totp_token(totp_secret: str) -> str | None:
 
 
 # =========================================================
-# EDGE DRIVER
+# EDGE DRIVER (Windows)
 # =========================================================
 def _build_edge_driver() -> webdriver.Edge:
     options = EdgeOptions()
@@ -117,6 +118,49 @@ def _build_edge_driver() -> webdriver.Edge:
     except Exception as e:
         cprint(f"❌ Edge failed to start: {e}", "red")
         sys.exit(1)
+
+
+# =========================================================
+# SAFARI DRIVER (macOS)
+# =========================================================
+def _build_safari_driver() -> webdriver.Safari:
+    """
+    Safari's WebDriver ships with macOS (/usr/bin/safaridriver) — no
+    separate driver download needed. One-time setup on the Mac:
+        1. Safari -> Settings -> Advanced -> enable "Show Develop menu"
+        2. Develop -> Allow Remote Automation
+        3. Run once in Terminal: safaridriver --enable
+    Note: Safari does not support headless mode or Chromium-style
+    --no-sandbox / --disable-gpu style options.
+    """
+    try:
+        driver = webdriver.Safari()
+        driver.set_window_size(1280, 900)
+        cprint("✅ Safari launched.", "green")
+        return driver
+    except Exception as e:
+        cprint(f"❌ Safari failed to start: {e}", "red")
+        cprint(
+            "   Run 'safaridriver --enable' and enable "
+            "Develop -> Allow Remote Automation in Safari, then retry.",
+            "yellow",
+        )
+        sys.exit(1)
+
+
+# =========================================================
+# DRIVER FACTORY — picks browser based on the host OS
+# =========================================================
+def _build_driver():
+    system = platform.system()
+    if system == "Darwin":
+        cprint("🍎 macOS detected → using Safari.", "blue")
+        return _build_safari_driver()
+    if system == "Windows":
+        cprint("🪟 Windows detected → using Edge.", "blue")
+        return _build_edge_driver()
+    cprint(f"⚠️  Unrecognized OS '{system}' → defaulting to Edge.", "yellow")
+    return _build_edge_driver()
 
 
 # =========================================================
@@ -293,8 +337,8 @@ def initialize_kite_session() -> KiteConnect:
         return kite
 
     # ── Browser login ─────────────────────────────────────────────────────────
-    cprint("🚀 Launching headless Edge...", "blue")
-    driver = _build_edge_driver()
+    cprint("🚀 Launching browser...", "blue")
+    driver = _build_driver()
 
     try:
         # ── Step 1: Load page ─────────────────────────────────────────────────
