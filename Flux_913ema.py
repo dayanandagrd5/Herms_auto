@@ -73,6 +73,10 @@ LOOKBACK = {
     "3minute":30,"5minute":30,"10minute":30,
     "15minute":30,"30minute":30,"60minute":60,"day":120,
 }
+# How many trailing days of candles are sent to the chart for display.
+# Indicators/order-blocks/signals are still computed on the full LOOKBACK
+# window above — only the chart payload is trimmed.
+CHART_DAYS = 10
 OPTIONS_CFG = {
     # lot_size intentionally removed — always fetched live from Kite master.
     # strike_gap is purely for ATM rounding and does NOT affect order quantity.
@@ -1204,6 +1208,120 @@ def generate_signals(df, bulls, bears, sweeps=None):
     return signals
 
 
+def _debug_last_bar_signal(df, bulls, bears, sweeps):
+    """
+    Diagnostic helper — replays the generate_signals() gates for the most
+    recent bar only and prints which gate (if any) blocked a signal.
+    Use this to answer "everything looked right, why no entry?" questions.
+    """
+    if df.empty or len(df) < 20:
+        print("[SIGDBG] BLOCKED: insufficient bars (<20)")
+        return
+
+    C = df["Close"].values; H = df["High"].values; L = df["Low"].values
+    e9  = calc_ema(df["Close"], 9).values
+    e13 = calc_ema(df["Close"], 13).values
+    st_dir, st_up, st_dn = compute_supertrend(df, ST_PERIOD, ST_MULT)
+    atr_arr = compute_atr(df, 14).values
+    i = len(df) - 1
+    c = C[i]
+
+    sweep_by_bar = {}
+    for sw in sweeps:
+        sweep_by_bar.setdefault(sw["bar_idx"], []).append(sw)
+
+    atr_now = atr_arr[i] if not np.isnan(atr_arr[i]) else 0
+    atr_avg = float(np.nanmean(atr_arr[max(0, i-20):i])) if i >= 5 else atr_now
+    ratio   = (atr_now/atr_avg) if atr_avg else 0
+    print(f"[SIGDBG] bar={df.index[i]} close={c:.2f} st_dir={st_dir[i]} "
+          f"atr_now={atr_now:.2f} atr_avg={atr_avg:.2f} ratio={ratio:.2f}")
+    if atr_avg > 0 and ratio < 0.20:
+        print("[SIGDBG] BLOCKED: dead-bar guard (low ATR vs avg)")
+        return
+
+    is_ranging, range_hi, range_lo = _is_ranging(C, H, L, i, lookback=20)
+    range_span = range_hi - range_lo
+    pos = (c - range_lo) / range_span if range_span else 0
+    print(f"[SIGDBG] is_ranging={is_ranging} pos={pos:.2f} range=[{range_lo:.2f},{range_hi:.2f}]")
+
+    cross_bar = None; cross_dir = None
+    for k in range(3):
+        j = i - k
+        if j < 1: break
+        if e9[j] > e13[j] and e9[j-1] <= e13[j-1]:
+            cross_bar = j; cross_dir = "BUY"; break
+        if e9[j] < e13[j] and e9[j-1] >= e13[j-1]:
+            cross_bar = j; cross_dir = "SELL"; break
+
+    st_flip_dir = None
+    if i >= 2:
+        if st_dir[i] == 1  and st_dir[i-2] == -1: st_flip_dir = "BUY"
+        if st_dir[i] == -1 and st_dir[i-2] ==  1: st_flip_dir = "SELL"
+
+    trigger_dir = cross_dir or st_flip_dir
+    trigger_bar = cross_bar if cross_dir else i
+    print(f"[SIGDBG] cross_dir={cross_dir}(bar={cross_bar}) st_flip_dir={st_flip_dir} "
+          f"-> trigger_dir={trigger_dir} trigger_bar={trigger_bar}")
+    if trigger_dir is None:
+        print("[SIGDBG] BLOCKED: no trigger (no EMA cross / ST flip in last 3 bars)")
+        return
+    if trigger_dir == "BUY"  and st_dir[i] != 1:
+        print(f"[SIGDBG] BLOCKED: ST disagrees with BUY trigger (st_dir={st_dir[i]})")
+        return
+    if trigger_dir == "SELL" and st_dir[i] != -1:
+        print(f"[SIGDBG] BLOCKED: ST disagrees with SELL trigger (st_dir={st_dir[i]})")
+        return
+
+    if is_ranging and range_span > 0:
+        if trigger_dir == "BUY" and pos > 0.40:
+            print(f"[SIGDBG] BLOCKED: ranging + pos={pos:.2f}>0.40 (too high for BUY)")
+            return
+        if trigger_dir == "SELL" and pos < 0.60:
+            print(f"[SIGDBG] BLOCKED: ranging + pos={pos:.2f}<0.60 (too low for SELL)")
+            return
+
+    sweep_window    = range(max(0, i - 10), i + 1)
+    required_sweep  = "sweep_low" if trigger_dir == "BUY" else "sweep_high"
+    found_sweeps    = [(bi, sw["type"]) for bi in sweep_window for sw in sweep_by_bar.get(bi, [])]
+    sweep_found     = any(t == required_sweep for _, t in found_sweeps)
+    print(f"[SIGDBG] need={required_sweep} window={list(sweep_window)} found={found_sweeps} -> sweep_found={sweep_found}")
+    if not sweep_found:
+        print("[SIGDBG] BLOCKED: no matching liquidity sweep in last 10 bars")
+        return
+
+    check_range = range(max(1, trigger_bar - 2), i + 1)
+    obs = bears if trigger_dir == "SELL" else bulls
+    ob_label = "bear" if trigger_dir == "SELL" else "bull"
+    print(f"[SIGDBG] checking {len(obs)} {ob_label} OB(s), check_range={list(check_range)}")
+    for ob in obs:
+        reasons = []
+        if ob.get("breaker"):
+            reasons.append("breaker")
+        if ob["start_idx"] >= trigger_bar:
+            reasons.append(f"start_idx({ob['start_idx']})>=trigger_bar({trigger_bar})")
+        size_pct = (ob["top"] - ob["bottom"]) / c * 100
+        if size_pct < 0.15:
+            reasons.append(f"too small ({size_pct:.3f}% < 0.15%)")
+        if trigger_dir == "SELL":
+            touched = any(H[j] >= ob["bottom"] and L[j] <= ob["top"] for j in check_range if j < len(H))
+            if not touched:
+                reasons.append("not touched")
+            if c >= ob["bottom"]:
+                reasons.append(f"close({c:.2f}) >= ob_bottom({ob['bottom']:.2f}) — no rejection close yet")
+        else:
+            touched = any(L[j] <= ob["top"] and H[j] >= ob["bottom"] for j in check_range if j < len(L))
+            if not touched:
+                reasons.append("not touched")
+            if c <= ob["top"]:
+                reasons.append(f"close({c:.2f}) <= ob_top({ob['top']:.2f}) — no breakout close yet")
+        status = "OK -> WOULD FIRE" if not reasons else f"SKIP ({', '.join(reasons)})"
+        print(f"[SIGDBG]   OB top={ob['top']:.2f} bottom={ob['bottom']:.2f} "
+              f"start_idx={ob['start_idx']} breaker={ob.get('breaker')} -> {status}")
+        if not reasons:
+            return
+    print("[SIGDBG] BLOCKED: no eligible OB passed all checks")
+
+
 # ════════════════════════════════════════════════════════════════════════════════
 # BACKTEST WALK-FORWARD
 # ════════════════════════════════════════════════════════════════════════════════
@@ -1622,6 +1740,10 @@ def data_endpoint():
     signals = generate_signals(df, bulls, bears, sweeps=sweeps)
     signals = backtest_signals(df, signals)
 
+    # ── Debug trace: explain why the latest bar produced no signal ───────────
+    if not any(s.get("bar_idx") == len(df) - 1 for s in signals):
+        _debug_last_bar_signal(df, bulls, bears, sweeps)
+
     # ── ATM option preview for the latest live (not-yet-exited) signal ───────
     atm_preview = None
     live_sigs = [s for s in signals if s.get("exit_reason") in (None, "Open")]
@@ -1716,20 +1838,36 @@ def data_endpoint():
     open_ = sum(1 for s in signals if s.get("exit_reason") == "Open")
     tpts  = sum(s.get("pts_captured") or 0 for s in signals if s.get("exit_reason") != "Open")
 
+    # ── Trim chart payload to the last CHART_DAYS days ────────────────────────
+    # Indicators/OBs/signals above are computed on the FULL lookback window so
+    # EMA/Supertrend/order-block warm-up stays accurate; only what's sent to
+    # the chart is trimmed here.
+    cutoff   = df.index[-1] - timedelta(days=CHART_DAYS)
+    vis_idx0 = int((df.index >= cutoff).argmax())
+
+    def _ob_visible(o):
+        if o["start_idx"] >= vis_idx0: return True
+        bi = o.get("break_idx")
+        return bi is None or bi >= vis_idx0
+
+    bulls_vis   = [o for o in bulls   if _ob_visible(o)]
+    bears_vis   = [o for o in bears   if _ob_visible(o)]
+    signals_vis = [s for s in signals if s.get("bar_idx", 0) >= vis_idx0]
+
     # Build the cacheable payload (everything except live state)
     static_payload = {
-        "symbol": symbol, "interval": interval, "timestamps": ts_out,
-        "open":   df["Open"].round(2).tolist(),
-        "high":   df["High"].round(2).tolist(),
-        "low":    df["Low"].round(2).tolist(),
-        "close":  df["Close"].round(2).tolist(),
-        "volume": df["Volume"].astype(int).tolist(),
-        "ema9":   e9.round(2).tolist(),
-        "ema13":  e13.round(2).tolist(),
-        "st_bull": st_bull, "st_bear": st_bear, "st_dir": st_dir.tolist(),
-        "bulls":   ser_obs(bulls, df),
-        "bears":   ser_obs(bears, df),
-        "signals": signals,
+        "symbol": symbol, "interval": interval, "timestamps": ts_out[vis_idx0:],
+        "open":   df["Open"].round(2).tolist()[vis_idx0:],
+        "high":   df["High"].round(2).tolist()[vis_idx0:],
+        "low":    df["Low"].round(2).tolist()[vis_idx0:],
+        "close":  df["Close"].round(2).tolist()[vis_idx0:],
+        "volume": df["Volume"].astype(int).tolist()[vis_idx0:],
+        "ema9":   e9.round(2).tolist()[vis_idx0:],
+        "ema13":  e13.round(2).tolist()[vis_idx0:],
+        "st_bull": st_bull[vis_idx0:], "st_bear": st_bear[vis_idx0:], "st_dir": st_dir.tolist()[vis_idx0:],
+        "bulls":   ser_obs(bulls_vis, df),
+        "bears":   ser_obs(bears_vis, df),
+        "signals": signals_vis,
         "atm_preview": atm_preview,
         "stats": {
             "total": total, "wins": wins, "losses": loss,

@@ -699,11 +699,12 @@ const fmtV = n => { if(!n) return '—'; if(n>=1e7) return (n/1e7).toFixed(1)+'C
 
 const C = {
   bg:'#131722',paper:'#131722',grid:'#1e2235',line:'#2a2e3e',text:'#787b86',
-  up:'#26a69a',dn:'#ef5350',ema9:'#f5a623',ema13:'#7b61ff',
+  up:'#26a69a',dn:'#ef5350',ema9:'#2962ff',ema13:'#ffeb3b',
   stBull:'#26a69a',stBear:'#ef5350',
   bullF:'rgba(38,166,154,0.15)',bullL:'rgba(38,166,154,0.6)',
   bearF:'rgba(239,83,80,0.15)', bearL:'rgba(239,83,80,0.6)',
   t1:'#f5a623',t2:'#26a69a',t3:'#7b61ff',sl:'#ef5350',
+  lastPrice:'#e0e0e0',
 };
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -1243,6 +1244,25 @@ function activeTradeShapes(trade, timestamps) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// LAST PRICE LINE — TradingView-style dashed line + price tag at last close
+// ═══════════════════════════════════════════════════════════════════════
+function lastPriceShapes(data, ts) {
+  const lastClose = data.close[data.close.length-1];
+  if (lastClose == null) return {sh:[], an:[]};
+  const x0 = ts[0], x1 = ts[ts.length-1];
+  const isUp = data.close.length>1 ? lastClose >= data.close[data.close.length-2] : true;
+  const clr = isUp ? C.up : C.dn;
+  return {
+    sh:[{type:'line',xref:'x',yref:'y',x0,x1,y0:lastClose,y1:lastClose,
+         line:{color:C.lastPrice,width:1,dash:'dot'},layer:'above'}],
+    an:[{x:x1,y:lastClose,xref:'x',yref:'y',text:`<b>${fmt(lastClose)}</b>`,
+         showarrow:false,xanchor:'left',yanchor:'middle',
+         font:{color:'#131722',size:10,family:'monospace'},
+         bgcolor:clr,borderpad:2}],
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // RANGEBREAKS
 // ═══════════════════════════════════════════════════════════════════════
 function rangebreaks(iv) {
@@ -1275,10 +1295,10 @@ function buildTraces(data, upToIdx) {
      line:{color:C.ema13,width:1.2},yaxis:'y',hoverinfo:'skip'},
     {type:'scatter',mode:'lines',name:'ST Bull',x:ts,
      y:data.st_bull.slice(0,n),
-     line:{color:C.stBull,width:1.5},connectgaps:false,yaxis:'y',hoverinfo:'skip'},
+     line:{color:C.stBull,width:2.5},connectgaps:false,yaxis:'y',hoverinfo:'skip'},
     {type:'scatter',mode:'lines',name:'ST Bear',x:ts,
      y:data.st_bear.slice(0,n),
-     line:{color:C.stBear,width:1.5},connectgaps:false,yaxis:'y',hoverinfo:'skip'},
+     line:{color:C.stBear,width:2.5},connectgaps:false,yaxis:'y',hoverinfo:'skip'},
     // BUY/SELL signal markers: only show for the active trade's live open signal
     // All historical backtest markers are suppressed to keep the chart clean
     ...(()=>{
@@ -1320,6 +1340,7 @@ function buildLayout(data, upToIdx) {
   const hasActiveTrade = !!(data.active_trade && data.active_trade.direction);
   const sig = signalShapes(sigsInView, ts, hasActiveTrade ? data.symbol : null);
   const at  = activeTradeShapes(data.active_trade, ts);
+  const lp  = lastPriceShapes(data, ts);
   return {
     dragmode:'pan',showlegend:false,
     paper_bgcolor:C.paper,plot_bgcolor:C.bg,
@@ -1335,8 +1356,8 @@ function buildLayout(data, upToIdx) {
            side:'right',showgrid:true,zeroline:false,automargin:true},
     yaxis2:{domain:[0,0.17],anchor:'x',gridcolor:C.grid,
             tickfont:{color:C.text,size:8},color:C.text,zeroline:false,showgrid:false},
-    shapes:  [...ob.sh, ...sig.sh, ...at.sh],
-    annotations:[...ob.an, ...sig.an, ...at.an],
+    shapes:  [...ob.sh, ...sig.sh, ...at.sh, ...lp.sh],
+    annotations:[...ob.an, ...sig.an, ...at.an, ...lp.an],
   };
 }
 
