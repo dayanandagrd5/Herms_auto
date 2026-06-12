@@ -609,6 +609,8 @@ def _poll_index(cfg_key: str):
             atr_s = compute_atr(df, 14)
             st_d, st_up, st_dn = compute_supertrend(df, ST_PERIOD, ST_MULT)
             avg_vol = float(df["Volume"].values[-20:].mean())
+            _expiry = _nearest_expiry(cfg_key)
+            _dte    = (_expiry - datetime.now(IST).date()).days if _expiry else None
             chart_state = {
                 "symbol": symbol, "interval": interval,
                 "last_close":  float(df["Close"].iloc[-1]),
@@ -635,7 +637,7 @@ def _poll_index(cfg_key: str):
                                 "win_rate": round(
                                     sum(1 for s in signals if (s.get("pts_captured") or 0)>0)
                                     / max(1,len(signals)) * 100, 1)},
-                "calendar":    {"allowed": True, "dte": 0},
+                "calendar":    {"allowed": tradeable, "reason": cal_reason, "dte": _dte},
                 "futures":     fut_vol if fut_vol else {},
             }
             result = hermes_analyse(chart_state)
@@ -2151,6 +2153,11 @@ def hermes_brain_endpoint():
     except Exception:
         fut_info = {}; fut_vol_raw = {}
 
+    # Calendar / DTE — based on the nearest WEEKLY option expiry for this index
+    expiry = _nearest_expiry(idx_key)
+    dte    = (expiry - datetime.now(IST).date()).days if expiry else None
+    cal_ok_hb, cal_msg_hb = is_index_tradeable(idx_key)
+
     bulls, bears = detect_order_blocks(df)
     if fut_vol_raw.get("session_vol", 0):
         bulls = enrich_obs_with_futures_vol(bulls, fut_vol_raw["session_vol"])
@@ -2201,7 +2208,7 @@ def hermes_brain_endpoint():
                 sum(1 for s in signals if (s.get("pts_captured") or 0) > 0)
                 / max(1, len(signals)) * 100, 1),
         },
-        "calendar": {"allowed": True, "dte": 0},
+        "calendar": {"allowed": cal_ok_hb, "reason": cal_msg_hb, "dte": dte},
         "futures":  fut_info or {},
     }
 
@@ -2212,10 +2219,6 @@ def hermes_brain_endpoint():
     # ── Auto-trade execution ──────────────────────────────────────────────────
     auto_cfg = get_auto_cfg()
     halted, _ = _check_limits()
-
-    # Calendar check for this symbol
-    cfg_key_hb = _index_key(symbol)
-    cal_ok_hb, cal_msg_hb = is_index_tradeable(cfg_key_hb)
 
     if (auto_cfg.get("enabled")
             and result["decision"] in ("BUY", "SELL")
@@ -2394,6 +2397,10 @@ def _build_chart_state_for_mtf(symbol: str, interval: str) -> dict | None:
         total = len(signals)
         wins  = sum(1 for s in signals if (s.get("pts_captured") or 0) > 0)
 
+        expiry = _nearest_expiry(idx_key)
+        dte    = (expiry - datetime.now(IST).date()).days if expiry else None
+        cal_ok, cal_msg = is_index_tradeable(idx_key)
+
         return {
             "symbol":       symbol,
             "interval":     interval,
@@ -2419,7 +2426,7 @@ def _build_chart_state_for_mtf(symbol: str, interval: str) -> dict | None:
                 "wins":     wins,
                 "win_rate": round(wins / max(1, total) * 100, 1),
             },
-            "calendar":     {"allowed": True, "dte": 0},
+            "calendar":     {"allowed": cal_ok, "reason": cal_msg, "dte": dte},
             "futures":      fut_vol_raw,
         }
     except Exception as e:

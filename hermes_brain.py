@@ -1299,21 +1299,6 @@ def is_btst_window() -> bool:
     return hm >= 900 and now.weekday() < 5   # after 3:00 PM
 
 
-def get_dte(symbol: str) -> int:
-    """
-    Days-to-expiry for the front-month contract.
-    Nifty: weekly Thursday. BankNifty: weekly Wednesday. Sensex: weekly Friday.
-    Rough calculation — production should read from Kite master.
-    """
-    today = date.today()
-    dow   = today.weekday()
-    targets = {"nsei": 3, "nsebank": 2, "sensex": 4}   # Thu, Wed, Fri
-    key = symbol.lower().replace("^", "")
-    target_dow = targets.get(key, 3)
-    days = (target_dow - dow) % 7
-    return days if days > 0 else 7
-
-
 # ════════════════════════════════════════════════════════════════════════════════
 # AUTO-TRADE HELPERS (called from Flux_913ema.py routes)
 # ════════════════════════════════════════════════════════════════════════════════
