@@ -42,7 +42,7 @@ end_time = datetime.strptime("23:30:00", "%H:%M:%S").time()
 exit_time = datetime.strptime("15:15:00", "%H:%M:%S").time()
 
 RSI_LENGTH = 9
-EMA_LENGTH = 3
+EMA_LENGTH = 9
 WMA_LENGTH = 21
 INDEX_TOKENS = {"BANKNIFTY": 260105}
 IST = ZoneInfo("Asia/Kolkata")
