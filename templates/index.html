@@ -471,6 +471,9 @@ body{background:var(--bg);color:var(--text);
         <span class="sig-dir" id="sc-dir">—</span>
         <span class="sig-rr" id="sc-rr">—</span>
       </div>
+      <div class="kv"><span class="k">Option</span><span class="v" id="sc-opt">—</span></div>
+      <div class="kv"><span class="k">Strike</span><span class="v" id="sc-strike">—</span></div>
+      <div class="kv"><span class="k">Opt LTP</span><span class="v v-y" id="sc-opt-ltp">—</span></div>
       <div class="kv"><span class="k">Entry</span><span class="v" id="sc-entry">—</span></div>
       <div class="kv"><span class="k">OB Vol%</span><span class="v v-y" id="sc-vol">—</span></div>
       <div class="tier-row">
@@ -494,6 +497,7 @@ body{background:var(--bg);color:var(--text);
         <span class="be-badge" id="at-be">BE Locked</span>
       </div>
       <div class="kv"><span class="k">Option</span><span class="v" id="at-opt">—</span></div>
+      <div class="kv"><span class="k">Strike</span><span class="v" id="at-strike">—</span></div>
       <div class="kv"><span class="k">Entry</span><span class="v" id="at-entry">—</span></div>
       <div class="kv"><span class="k">Trail SL</span><span class="v v-r" id="at-sl">—</span></div>
       <div class="tier-row">
@@ -604,7 +608,7 @@ body{background:var(--bg);color:var(--text);
       <tr><td>T1/T2/T3</td><td id="m-tiers"></td></tr>
       <tr><td>RR (T2)</td> <td id="m-rr"></td></tr>
       <tr><td>Lots</td>    <td id="m-lots"></td></tr>
-      <tr><td>Option</td>  <td id="m-opt">ATM CE/PE</td></tr>
+      <tr><td>Option</td>  <td id="m-opt">—</td></tr>
     </table>
     <div class="modal-status" id="conf-status"></div>
     <div class="modal-btns">
@@ -1400,7 +1404,7 @@ function updatePanel(data) {
   const noSig  =document.getElementById('no-sig');
 
   if(latest && !data.active_trade && !skipped) {
-    pendingSig={...latest, symbol:data.symbol, interval:data.interval};
+    pendingSig={...latest, symbol:data.symbol, interval:data.interval, atm:data.atm_preview||null};
     sigCard.style.display='block';
     sigCard.className='sig-card '+(latest.direction==='BUY'?'buy':'sell');
     noSig.style.display='none';
@@ -1408,6 +1412,10 @@ function updatePanel(data) {
     document.getElementById('sc-dir').textContent   = isBuy?'▲ BUY CE':'▼ BUY PE';
     document.getElementById('sc-dir').style.color   = isBuy?'var(--green)':'var(--red)';
     document.getElementById('sc-rr').textContent    = `RR ${latest.rr2}x`;
+    const atm=data.atm_preview;
+    document.getElementById('sc-opt').textContent     = atm?atm.tradingsymbol:'—';
+    document.getElementById('sc-strike').textContent  = atm?`${atm.strike} ${atm.opt_type}`:'—';
+    document.getElementById('sc-opt-ltp').textContent = atm?fmt(atm.ltp):'—';
     document.getElementById('sc-entry').textContent = fmt(latest.entry);
     document.getElementById('sc-vol').textContent   = latest.ob_vol_pct+'%';
     document.getElementById('sc-sl').textContent    = fmt(latest.sl);
@@ -1430,6 +1438,7 @@ function updatePanel(data) {
     document.getElementById('at-dir').textContent   = at.direction==='BUY'?'▲ LONG (CE)':'▼ SHORT (PE)';
     document.getElementById('at-dir').style.color   = at.direction==='BUY'?'var(--green)':'var(--red)';
     document.getElementById('at-opt').textContent   = at.option_symbol||'—';
+    document.getElementById('at-strike').textContent= (at.strike!=null)?`${at.strike} ${at.opt_type||''}`:'—';
     document.getElementById('at-entry').textContent = fmt(at.entry_price);
     document.getElementById('at-sl').textContent    = fmt(at.trail_stop);
     document.getElementById('at-t2').textContent    = fmt(at.t2);
@@ -2054,6 +2063,9 @@ document.getElementById('placeBtn').addEventListener('click',()=>{
   document.getElementById('m-tiers').textContent = `${fmt(pendingSig.t1)} / ${fmt(pendingSig.t2)} / ${fmt(pendingSig.t3)}`;
   document.getElementById('m-rr').textContent    = `${pendingSig.rr2}x`;
   document.getElementById('m-lots').textContent  = lots+' lot(s)';
+  document.getElementById('m-opt').textContent   = pendingSig.atm
+    ? `${pendingSig.atm.tradingsymbol} (${pendingSig.atm.strike} ${pendingSig.atm.opt_type}) @ ${fmt(pendingSig.atm.ltp)}`
+    : '—';
   document.getElementById('conf-status').textContent='';
   document.getElementById('conf-ok').dataset.lots=lots;
   document.getElementById('conf-overlay').classList.add('show');

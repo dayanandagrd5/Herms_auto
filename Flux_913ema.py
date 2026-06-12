@@ -1622,6 +1622,30 @@ def data_endpoint():
     signals = generate_signals(df, bulls, bears, sweeps=sweeps)
     signals = backtest_signals(df, signals)
 
+    # ── ATM option preview for the latest live (not-yet-exited) signal ───────
+    atm_preview = None
+    live_sigs = [s for s in signals if s.get("exit_reason") in (None, "Open")]
+    if live_sigs:
+        try:
+            last_sig = live_sigs[-1]
+            opt = get_atm_option(symbol, last_sig["entry"], last_sig["direction"])
+            if opt:
+                try:
+                    ltp_raw = kite.ltp([f"{opt['exchange']}:{opt['tradingsymbol']}"])
+                    opt_ltp = float(list(ltp_raw.values())[0]["last_price"])
+                except Exception:
+                    opt_ltp = 0.0
+                atm_preview = {
+                    "tradingsymbol": opt["tradingsymbol"],
+                    "strike":        opt["strike"],
+                    "opt_type":      opt["opt_type"],
+                    "expiry":        opt["expiry"],
+                    "lot_size":      opt["lot_size"],
+                    "ltp":           opt_ltp,
+                }
+        except Exception as e:
+            print(f"[ATM PREVIEW] {symbol}: {e}")
+
     # Live exit checks (uses just-fetched df)
     with _trade_lock:
         ts_ = dict(_active_trades.get(symbol, {}))
@@ -1706,6 +1730,7 @@ def data_endpoint():
         "bulls":   ser_obs(bulls, df),
         "bears":   ser_obs(bears, df),
         "signals": signals,
+        "atm_preview": atm_preview,
         "stats": {
             "total": total, "wins": wins, "losses": loss,
             "open": open_, "total_pts": round(tpts, 1),
