@@ -2,8 +2,8 @@
 ip_update.py — Kite Developer Portal IP updater (Windows / Edge, macOS / Safari)
 ====================================================
 Logs in to developers.kite.trade with credentials from config.yaml,
-then replaces the IP-whitelist field with both current public IPs
-(IPv4 + IPv6, newline-separated, fetched in parallel).
+then replaces the IP-whitelist field with the current public IPv6
+address.
 
 The browser driver is picked automatically based on the host OS:
   - Windows -> Microsoft Edge (msedgedriver)
@@ -26,11 +26,11 @@ Standalone:    python ip_update.py
 Programmatic:  from ip_update import ensure_ip_whitelisted
 """
 
+import os
 import logging
 import platform
 import yaml
 import requests
-import concurrent.futures
 from pathlib import Path
 
 from selenium import webdriver
@@ -108,7 +108,7 @@ def save_last_known_ip(ip: str):
         f.writelines(new_lines)
 
 
-# ── Public IP detection — IPv4 + IPv6 fetched in parallel ─────────────────────
+# ── Public IP detection — IPv6 only ───────────────────────────────────────────
 
 def _fetch(url: str) -> str:
     return requests.get(url, timeout=5).text.strip()
@@ -116,36 +116,21 @@ def _fetch(url: str) -> str:
 
 def get_current_ips() -> str:
     """
-    Fetches IPv4 and IPv6 concurrently.
-    Returns newline-separated IPs e.g. "103.21.58.12\n2406:7400:..."
+    Fetches the current public IPv6 address.
+    Returns it as a single-line string e.g. "2406:7400:..."
     """
-    tasks = {
-        "v4": ["https://api.ipify.org",  "https://ipv4.icanhazip.com"],
-        "v6": ["https://api6.ipify.org", "https://ipv6.icanhazip.com"],
-    }
+    urls = ["https://api6.ipify.org", "https://ipv6.icanhazip.com"]
 
-    def fetch_family(urls, expect_colon):
-        for url in urls:
-            try:
-                ip = _fetch(url)
-                if ip and ((":" in ip) == expect_colon):
-                    return ip
-            except Exception:
-                continue
-        return None
+    for url in urls:
+        try:
+            ip = _fetch(url)
+            if ip and ":" in ip:
+                log.info("[IP] %r", ip)
+                return ip
+        except Exception:
+            continue
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as ex:
-        f4   = ex.submit(fetch_family, tasks["v4"], False)
-        f6   = ex.submit(fetch_family, tasks["v6"], True)
-        ipv4 = f4.result()
-        ipv6 = f6.result()
-
-    if not ipv4 and not ipv6:
-        raise RuntimeError("Could not detect any public IP")
-
-    combined = "\n".join(a for a in [ipv4, ipv6] if a)
-    log.info("[IP] %r", combined)
-    return combined
+    raise RuntimeError("Could not detect a public IPv6 address")
 
 
 # ── Edge driver (Windows) ─────────────────────────────────────────────────────
@@ -159,13 +144,16 @@ def _build_edge_driver() -> webdriver.Edge:
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
+    # Suppress Chromium's internal [PID:TID:...]ERROR:... console spam
+    options.add_argument("--log-level=3")
+    options.add_experimental_option("excludeSwitches", ["enable-logging"])
     # Uncomment to run without a visible browser window:
     # options.add_argument("--headless=new")
 
     driver_path = str(EDGE_DRIVER_PATH) if EDGE_DRIVER_PATH.exists() else "msedgedriver"
 
     try:
-        service = EdgeService(executable_path=driver_path)
+        service = EdgeService(executable_path=driver_path, log_output=os.devnull)
         driver  = webdriver.Edge(service=service, options=options)
         return driver
     except Exception as e:

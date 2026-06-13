@@ -472,8 +472,6 @@ cfg = load_config()
 kite = get_kite(cfg)
 master = get_master(kite)
 
-start_ip_watcher()
-
 cprint("Kite and master loaded successfully! ",Fore.GREEN)
 cprint("BOT STARTED", Fore.CYAN)
 cash_available = kite.margins("equity")["available"]["live_balance"]

@@ -90,5 +90,5 @@ kite_dev:
 
 # ── Runtime State (auto-managed by ip_update.py) ─────────────
 runtime:
-  last_known_ip: "106.51.193.163\n2406:7400:104:7069:8d5:a135:8959:e5d"
+  last_known_ip: "2406:7400:104:92d5:8c3:4110:379d:7f48"
 

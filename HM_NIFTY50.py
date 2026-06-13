@@ -463,16 +463,20 @@ cfg = load_config()
 kite = get_kite(cfg)
 master = get_master(kite)
 
-start_ip_watcher()
+
 
 cprint("Kite and master loaded successfully! ",Fore.GREEN)
 cprint("BOT STARTED", Fore.CYAN)
-cash_available = kite.margins("equity")["available"]["live_balance"]
-cprint(f"Available Cash: {cash_available}", Fore.GREEN)
+
 
 while True:
+    
     current_time = datetime.now().time()
     print("Running main loop... and current time is ",current_time)
+    cash_available = kite.margins("equity")["available"]["live_balance"]
+    cprint("" + "=" * 70, Fore.YELLOW)
+    cprint(f"Available Cash: {cash_available}", Fore.GREEN)
+    cprint("" + "=" * 70, Fore.YELLOW)
     start_ip_watcher()
 
     if datetime.now().weekday() not in (0, 3, 4):  # Mon=0, Thu=3, Fri=4
