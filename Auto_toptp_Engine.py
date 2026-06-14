@@ -16,6 +16,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+from selenium.common.exceptions import StaleElementReferenceException
 
 # =========================================================
 # PATHS
@@ -176,6 +177,17 @@ def _wait_clickable(driver, by, locator, timeout=20):
         EC.element_to_be_clickable((by, locator))
     )
 
+def _retry_on_stale(fn, retries=4, delay=0.4):
+    """Run fn(), re-trying if the page re-renders and the element goes stale."""
+    last_exc = None
+    for _ in range(retries):
+        try:
+            return fn()
+        except StaleElementReferenceException as e:
+            last_exc = e
+            time.sleep(delay)
+    raise last_exc
+
 def _js_click(driver, element):
     driver.execute_script("arguments[0].click();", element)
 
@@ -217,7 +229,7 @@ def _already_redirected(driver) -> bool:
 # =========================================================
 # SUBMIT TOTP  (returns True if redirect was detected)
 # =========================================================
-def _submit_totp_and_wait(driver, totp_field, pin: str) -> bool:
+def _submit_totp_and_wait(driver, totp_xpath, pin: str) -> bool:
     """
     Kite's TOTP page behaviour varies:
       A) Auto-submits once 6 digits are keyed in  (no button click needed)
@@ -229,14 +241,26 @@ def _submit_totp_and_wait(driver, totp_field, pin: str) -> bool:
       3. If still on TOTP page, press Enter (covers case B).
       4. Wait again.
       5. If still stuck, find & JS-click any visible submit button.
+
+    The TOTP field is re-located by XPath before every interaction (and
+    retried on StaleElementReferenceException) because Kite's page
+    re-renders the form right after the field becomes visible, which
+    invalidates any cached WebElement reference.
     """
+    def get_field():
+        return _wait_visible(driver, By.XPATH, totp_xpath, timeout=10)
+
     # --- 1. Type TOTP digit-by-digit via JS setter then key strokes --------
-    totp_field.click()
-    totp_field.clear()
-    # Use JS to set value so React/Vue state registers the full string
-    _js_set_value(driver, totp_field, pin)
-    # Then also send the keys so the native input events fire properly
-    totp_field.send_keys(pin)
+    def _type_pin():
+        field = get_field()
+        field.click()
+        field.clear()
+        # Use JS to set value so React/Vue state registers the full string
+        _js_set_value(driver, field, pin)
+        # Then also send the keys so the native input events fire properly
+        field.send_keys(pin)
+
+    _retry_on_stale(_type_pin)
     cprint(f"   ✓ TOTP entered: {pin}", "white")
     time.sleep(1.0)   # let React debounce settle
 
@@ -250,7 +274,7 @@ def _submit_totp_and_wait(driver, totp_field, pin: str) -> bool:
 
     # --- 3. Press Enter on the TOTP field -----------------------------------
     try:
-        totp_field.send_keys(Keys.RETURN)
+        _retry_on_stale(lambda: get_field().send_keys(Keys.RETURN))
         cprint("   ✓ Pressed Enter on TOTP field.", "white")
     except Exception:
         pass
@@ -296,7 +320,7 @@ def _submit_totp_and_wait(driver, totp_field, pin: str) -> bool:
     try:
         driver.execute_script(
             "arguments[0].closest('form') && arguments[0].closest('form').submit();",
-            totp_field,
+            _retry_on_stale(get_field),
         )
         cprint("   ✓ JS form.submit() called.", "white")
         try:
@@ -371,6 +395,7 @@ def initialize_kite_session() -> KiteConnect:
 
         # ── Step 6: Find TOTP field ───────────────────────────────────────────
         totp_field = None
+        totp_xpath_used = None
         totp_xpaths = [
             '//input[@label="External TOTP"]',
             '//input[@placeholder="External TOTP"]',
@@ -389,6 +414,7 @@ def initialize_kite_session() -> KiteConnect:
                 if totp_field.get_attribute("id") == "password":
                     totp_field = None
                     continue
+                totp_xpath_used = xpath
                 cprint(f"   ✓ TOTP field found: {xpath}", "white")
                 break
             except Exception:
@@ -402,7 +428,7 @@ def initialize_kite_session() -> KiteConnect:
         if not pin:
             raise RuntimeError("TOTP returned None.")
 
-        submitted = _submit_totp_and_wait(driver, totp_field, pin)
+        submitted = _submit_totp_and_wait(driver, totp_xpath_used, pin)
 
         if not submitted:
             cprint("   ⚠️  First TOTP attempt failed. Waiting for next 30-s window...", "yellow")
@@ -410,14 +436,7 @@ def initialize_kite_session() -> KiteConnect:
             pin2 = get_live_totp_token(config["totp_secret"])
             if pin2 and pin2 != pin:
                 try:
-                    for xpath in totp_xpaths:
-                        try:
-                            totp_field = _wait_visible(driver, By.XPATH, xpath, timeout=5)
-                            if totp_field.get_attribute("id") != "password":
-                                break
-                        except Exception:
-                            continue
-                    submitted = _submit_totp_and_wait(driver, totp_field, pin2)
+                    submitted = _submit_totp_and_wait(driver, totp_xpath_used, pin2)
                 except Exception:
                     pass
 

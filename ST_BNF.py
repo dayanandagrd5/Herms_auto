@@ -15,36 +15,35 @@ from kiteconnect import KiteConnect
 from Auto_toptp_Engine import initialize_kite_session
 
 LOG_DIR  = r"C:\Code\KiteConnect\Trade_logs_All_Bots"
-LOG_FILE = os.path.join(LOG_DIR, "NIFTY_trades.csv")
+LOG_FILE = os.path.join(LOG_DIR, "BANKNIFTY_ST_trades.csv")
 HEADERS = [
     "date", "entry_time", "exit_time",
     "symbol", "option_type", "strike",
     "entry_price", "exit_price",
     "qty", "pnl", "pnl_pct",
-    "entry_rsi_ema", "entry_rsi_wma",
+    "entry_supertrend", "entry_st_direction",
     "exit_reason",                      # SIGNAL / EOD / MANUAL
-    "regime_vwap",                      # price vs vwap at entry: ABOVE / BELOW
+    "regime_trend",                      # trend direction at entry: BULLISH / BEARISH
     "order_id_entry", "order_id_exit"
 ]
- 
+
 
 BASE_DIR    = os.path.dirname(os.path.abspath(__file__))
 MASTER_FILE = os.path.join(BASE_DIR, "instruments_master.csv")
 CONFIG_FILE = os.path.join(BASE_DIR, "config.json")
 TOKEN_FILE  = os.path.join(BASE_DIR, "access_token.json")
 
-INDEX = "NIFTY"
-INDEX_QUOTE = "NSE:NIFTY 50"
+INDEX = "BANKNIFTY"
+INDEX_QUOTE = "NSE:NIFTY BANK"
 TIMEFRAME = "5minute"
 
 start_time = datetime.strptime("09:30:00", "%H:%M:%S").time()
 end_time = datetime.strptime("23:30:00", "%H:%M:%S").time()
 exit_time = datetime.strptime("15:15:00", "%H:%M:%S").time()
 
-RSI_LENGTH = 9
-EMA_LENGTH = 9
-WMA_LENGTH = 21
-INDEX_TOKENS = {"NIFTY": 256265}
+ST_LENGTH = 7
+ST_MULTIPLIER = 1.8
+INDEX_TOKENS = {"BANKNIFTY": 260105}
 IST = ZoneInfo("Asia/Kolkata")
 
 Buy = False
@@ -83,8 +82,8 @@ def init_log():
         print(f"   ✓ Trade log created: {LOG_FILE}")
     else:
         print(f"   ✓ Trade log found  : {LOG_FILE}")
- 
- 
+
+
 # Holds the open trade state between entry and exit
 _open_trade = {}
 
@@ -97,21 +96,21 @@ def log_entry(symbol, option_type, strike, entry_price, qty,
     now = datetime.now(IST)
     _open_trade.clear()
     _open_trade.update({
-        "date"           : now.strftime("%Y-%m-%d"),
-        "entry_time"     : now.strftime("%H:%M:%S"),
-        "symbol"         : symbol,
-        "option_type"    : option_type,          # "CE" or "PE"
-        "strike"         : strike,
-        "entry_price"    : entry_price,
-        "qty"            : qty,
-        "entry_rsi_ema"  : round(df["EMA3"].iloc[-2], 4),
-        "entry_rsi_wma"  : round(df["WMA21"].iloc[-2], 4),
-        "regime_vwap"    : "ABOVE" if df["close"].iloc[-2] > df["VWAP"].iloc[-2] else "BELOW",
-        "order_id_entry" : order_id,
+        "date"               : now.strftime("%Y-%m-%d"),
+        "entry_time"         : now.strftime("%H:%M:%S"),
+        "symbol"             : symbol,
+        "option_type"        : option_type,          # "CE" or "PE"
+        "strike"             : strike,
+        "entry_price"        : entry_price,
+        "qty"                : qty,
+        "entry_supertrend"   : round(df["SUPERT"].iloc[-2], 4),
+        "entry_st_direction" : int(df["SUPERTd"].iloc[-2]),
+        "regime_trend"       : "BULLISH" if df["SUPERTd"].iloc[-2] == 1 else "BEARISH",
+        "order_id_entry"     : order_id,
     })
     print(f"   ✓ Entry logged: {symbol} @ {entry_price}")
- 
- 
+
+
 def log_exit(exit_price, exit_reason="SIGNAL", order_id=""):
     """
     Call this immediately after a successful sell_order().
@@ -121,13 +120,13 @@ def log_exit(exit_price, exit_reason="SIGNAL", order_id=""):
     if not _open_trade:
         print("   ⚠ log_exit called but no open trade in memory")
         return
- 
+
     now        = datetime.now(IST)
     entry_px   = _open_trade["entry_price"]
     qty        = _open_trade["qty"]
     pnl        = round((exit_price - entry_px) * qty, 2)
     pnl_pct    = round((exit_price - entry_px) / entry_px * 100, 2)
- 
+
     row = {**_open_trade,
            "exit_time"     : now.strftime("%H:%M:%S"),
            "exit_price"    : exit_price,
@@ -136,16 +135,16 @@ def log_exit(exit_price, exit_reason="SIGNAL", order_id=""):
            "exit_reason"   : exit_reason,
            "order_id_exit" : order_id,
     }
- 
+
     with open(LOG_FILE, "a", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=HEADERS)
         writer.writerow(row)
- 
+
     color = "\033[92m" if pnl >= 0 else "\033[91m"
     reset = "\033[0m"
     print(f"   {color}✓ Trade logged | PnL: {pnl:+.2f} ({pnl_pct:+.2f}%){reset}")
     _open_trade.clear()
- 
+
 # =========================================================
 # PRINT HELPERS
 # =========================================================
@@ -225,7 +224,7 @@ def get_master(kite, force_refresh=False):
 
     return df
 
-def next_futures_expiry(master, index="NIFTY"):
+def next_futures_expiry(master, index="BANKNIFTY"):
     """
     Returns the nearest upcoming futures expiry date for the index.
     Looks in NFO segment for FUT instrument type.
@@ -235,21 +234,21 @@ def next_futures_expiry(master, index="NIFTY"):
         master["instrument_type"].eq("FUT") &
         master["segment"].astype(str).str.upper().eq("NFO-FUT")
     ].copy()
- 
+
     sub["expiry"] = pd.to_datetime(sub["expiry"], errors="coerce").dt.date
     future = sub[sub["expiry"] >= date.today()]["expiry"].dropna().sort_values().unique()
- 
+
     if len(future) == 0:
         raise Exception(f"No futures expiry found for {index} in master")
- 
+
     exp = future[0]
     print(f"   Next futures expiry [{index}]: {exp}")
     return exp
 
-def get_futures_token(master, index="NIFTY"):
+def get_futures_token(master, index="BANKNIFTY"):
     """
     Returns (tradingsymbol, instrument_token) for the front-month
-    NIFTY futures contract from NFO.
+    BANKNIFTY futures contract from NFO.
     """
     exp = next_futures_expiry(master, index)
 
@@ -259,17 +258,17 @@ def get_futures_token(master, index="NIFTY"):
         master["segment"].astype(str).str.upper().eq("NFO-FUT") &
         (pd.to_datetime(master["expiry"], errors="coerce").dt.date == exp)
     ].copy()
- 
+
     if sub.empty:
         raise Exception(f"Futures contract not found for {index} expiry {exp}")
- 
+
     row = sub.iloc[0]
     symbol = str(row["tradingsymbol"])
     token  = int(row["instrument_token"])
     print(f"   Futures symbol [{index}]: {symbol} | Token: {token}")
     return symbol, token
 
-def fetch_futures_ohlc(kite, index="NIFTY", interval="5minute", days=3):
+def fetch_futures_ohlc(kite, index="BANKNIFTY", interval="5minute", days=3):
     """
     Fetches OHLCV from the front-month futures contract.
     This gives real volume — needed for VWAP calculation.
@@ -277,24 +276,24 @@ def fetch_futures_ohlc(kite, index="NIFTY", interval="5minute", days=3):
     Prices track spot very closely (basis < 0.1% intraday).
     """
     _, token = get_futures_token(master, index)
- 
+
     to_dt = datetime.now(IST)
     fr_dt = to_dt - timedelta(days=days)
- 
+
     rows = kite.historical_data(
         token,
         fr_dt.strftime("%Y-%m-%d %H:%M:%S"),
         to_dt.strftime("%Y-%m-%d %H:%M:%S"),
         interval, False, False
     )
- 
+
     if not rows:
         raise Exception(f"No futures OHLCV returned for {index}")
- 
+
     df = pd.DataFrame(rows).rename(columns={"date": "dt"})
     df["dt"] = pd.to_datetime(df["dt"])
     df = df.set_index("dt").sort_index()
- 
+
     print(f"   ✓ Futures OHLCV [{index}]: {len(df)} x {interval} "
           f"| Close: {df['close'].iloc[-1]:.2f} "
           f"@ {df.index[-1].strftime('%H:%M')} "
@@ -319,6 +318,15 @@ def next_expiry(master, index):
     exp = future[0]
     print(f"   Next expiry [{index}]: {exp}")
     return exp
+
+def days_to_expiry(master, index):
+    """
+    Returns the number of calendar days until the next options expiry
+    for `index` (DTE). Used to only allow trading in the final days
+    before expiry.
+    """
+    exp = next_expiry(master, index)
+    return (exp - date.today()).days
 
 def lot_size(master, index):
     sub = master[
@@ -359,11 +367,10 @@ def find_option_symbol(master, index, expiry, strike, opt_type):
     return str(row["tradingsymbol"]), int(row["instrument_token"])
 
 def calculate_indicators(df):
-    df["RSI"] = ta.rsi(df["close"], length=RSI_LENGTH)
-    df["EMA3"] = ta.ema(df["RSI"], length=EMA_LENGTH)
-    df["WMA21"] = ta.wma(df["RSI"], length=WMA_LENGTH)
-    df["VWAP"] = ta.vwap(df["high"], df["low"], df["close"], df["volume"])
-    df["SMA50"] = ta.sma(df["close"], length=50)
+    st = ta.supertrend(df["high"], df["low"], df["close"], length=ST_LENGTH, multiplier=ST_MULTIPLIER)
+    suffix = f"{ST_LENGTH}_{ST_MULTIPLIER}"
+    df["SUPERT"] = st[f"SUPERT_{suffix}"]
+    df["SUPERTd"] = st[f"SUPERTd_{suffix}"]
     return df
 
 def find_option_symbol(master, index, expiry, strike, opt_type):
@@ -476,30 +483,26 @@ cfg = load_config()
 kite = get_kite(cfg)
 master = get_master(kite)
 
-
-
 cprint("Kite and master loaded successfully! ",Fore.GREEN)
 cprint("BOT STARTED", Fore.CYAN)
-
+cash_available = kite.margins("equity")["available"]["live_balance"]
+cprint(f"Available Cash: {cash_available}", Fore.GREEN)
 
 while True:
-    
     current_time = datetime.now().time()
     print("Running main loop... and current time is ",current_time)
-    cash_available = kite.margins("equity")["available"]["live_balance"]
-    cprint("" + "=" * 70, Fore.YELLOW)
-    cprint(f"Available Cash: {cash_available}", Fore.GREEN)
-    cprint("" + "=" * 70, Fore.YELLOW)
     start_ip_watcher()
 
-    if datetime.now().weekday() not in (0, 3, 4, 5):  # Mon=0, Thu=3, Fri=4
-        cprint("Not Monday/Thursday/Friday. Not trading today, skipping...", Fore.YELLOW)
-        time.sleep(5)
-        continue
+    if current_time >= start_time and current_time <= end_time:
+        dte = days_to_expiry(master, INDEX)
+        if dte >= 8:
+            cprint(f"DTE = {dte} (>= 8). Not trading today, skipping...", Fore.YELLOW)
+            time.sleep(5)
+            continue
 
     if current_time >= start_time and current_time <= end_time:
             cprint("Market is open. Scanning for signals...", Fore.GREEN)
-            
+
             # Place your scanning and trading logic here
             df = fetch_futures_ohlc(kite, INDEX, TIMEFRAME, days=3)
             df = calculate_indicators(df)
@@ -514,7 +517,7 @@ while True:
             PE_symbol, PE_token = find_option_symbol(master, INDEX, expiry, PE_strike, "PE")
             cprint(f"ATM CE: {CE_symbol} (Token: {CE_token})", Fore.YELLOW)
             cprint(f"ATM PE: {PE_symbol} (Token: {PE_token})", Fore.YELLOW)
-            
+
             CE_ltp, CE_qty = get_ltp_and_qty(
                 kite,
                 CE_symbol,
@@ -530,49 +533,35 @@ while True:
             cprint(f"CE LTP: {CE_ltp} | Qty: {CE_qty}", Fore.GREEN)
             cprint(f"PE LTP: {PE_ltp} | Qty: {PE_qty}", Fore.RED)
 
-            if df.EMA3.iloc[-3] < df.WMA21.iloc[-3] and df.EMA3.iloc[-2] > df.WMA21.iloc[-2] and Buy == False:
-                    print("Buy Signal for CE")
-                    cprint(f"Placing buy order for {CE_symbol}...", Fore.GREEN)
+            cprint(f"Supertrend: {df.SUPERT.iloc[-2]:.2f} | Trend: {'BULLISH' if df.SUPERTd.iloc[-2] == 1 else 'BEARISH'}", Fore.MAGENTA)
 
+            if df.SUPERTd.iloc[-3] == -1 and df.SUPERTd.iloc[-2] == 1 and Buy == False:
+                    print("Supertrend flipped Bullish - Buy Signal for CE")
+
+                    if Sell == True:
+                        cprint(f"Trailing exit (ST flip) - placing sell order for {Traded_symbol}...", Fore.GREEN)
+                        sell_order(Traded_symbol, Traded_quanity)
+                        Sell = False
+
+                    cprint(f"Placing buy order for {CE_symbol}...", Fore.GREEN)
                     buy_order(CE_symbol, CE_qty)
                     Traded_symbol = CE_symbol
                     Buy = True
                     Traded_quanity = CE_qty
 
-            elif df.EMA3.iloc[-3] > df.WMA21.iloc[-3] and df.EMA3.iloc[-2] < df.WMA21.iloc[-2] and Sell == False:
-                    print("Buy Signal for PE")
-                    cprint(f"Placing buy order for {PE_symbol}...", Fore.GREEN)
+            elif df.SUPERTd.iloc[-3] == 1 and df.SUPERTd.iloc[-2] == -1 and Sell == False:
+                    print("Supertrend flipped Bearish - Buy Signal for PE")
 
+                    if Buy == True:
+                        cprint(f"Trailing exit (ST flip) - placing sell order for {Traded_symbol}...", Fore.GREEN)
+                        sell_order(Traded_symbol, Traded_quanity)
+                        Buy = False
+
+                    cprint(f"Placing buy order for {PE_symbol}...", Fore.GREEN)
                     buy_order(PE_symbol, PE_qty)
                     Traded_symbol = PE_symbol
                     Sell = True
                     Traded_quanity = PE_qty
-            elif df.EMA3.iloc[-3] > df.WMA21.iloc[-3] and df.EMA3.iloc[-2] < df.WMA21.iloc[-2] and Buy == True:
-                    print("Sell Signal for CE")
-                    cprint(f"Placing sell order for {Traded_symbol}...", Fore.GREEN)
-
-                    sell_order(Traded_symbol, Traded_quanity)
-                    Buy = False
-
-            elif df.EMA3.iloc[-3] < df.WMA21.iloc[-3] and df.EMA3.iloc[-2] > df.WMA21.iloc[-2] and Sell == True:
-                    print("Sell Signal for PE")
-                    cprint(f"Placing sell order for {Traded_symbol}...", Fore.GREEN)
-
-                    sell_order(Traded_symbol, Traded_quanity)
-                    Sell = False
-            elif df.RSI.iloc[-1] > 88 and df.RSI.iloc[-2] <= 88 and Buy[INDEX] == True:
-                    print("RSI Exit Signal for CE")
-                    cprint(f"Placing sell order for {Traded_symbol[INDEX]}...", Fore.GREEN)
-
-                    sell_order(Traded_symbol[INDEX], Traded_quanity)
-                    Buy[INDEX] = False
-            
-            elif df.RSI.iloc[-1] < 12 and df.RSI.iloc[-2] >= 12 and Sell[INDEX] == True:
-                    print("RSI Exit Signal for PE")
-                    cprint(f"Placing sell order for {Traded_symbol[INDEX]}...", Fore.GREEN)
-
-                    sell_order(Traded_symbol[INDEX], Traded_quanity)
-                    Sell[INDEX] = False
 
             elif current_time >= exit_time:
                     cprint("Market is about to close. Exiting any open positions...", Fore.RED)
@@ -581,7 +570,7 @@ while True:
                         Buy = False
                     if Sell == True:
                         sell_order(Traded_symbol, Traded_quanity)
-                        Sell = False    
+                        Sell = False
 
 
             if Buy== True:
