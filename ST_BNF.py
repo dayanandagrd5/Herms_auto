@@ -268,7 +268,7 @@ def get_futures_token(master, index="BANKNIFTY"):
     print(f"   Futures symbol [{index}]: {symbol} | Token: {token}")
     return symbol, token
 
-def fetch_futures_ohlc(kite, index="BANKNIFTY", interval="5minute", days=3):
+def fetch_futures_ohlc(kite, index="BANKNIFTY", interval="5minute", days=15):
     """
     Fetches OHLCV from the front-month futures contract.
     This gives real volume — needed for VWAP calculation.
@@ -368,7 +368,7 @@ def find_option_symbol(master, index, expiry, strike, opt_type):
 
 def calculate_indicators(df):
     st = ta.supertrend(df["high"], df["low"], df["close"], length=ST_LENGTH, multiplier=ST_MULTIPLIER)
-    suffix = f"{ST_LENGTH}_{ST_MULTIPLIER}"
+    suffix = f"{ST_LENGTH}_{float(ST_MULTIPLIER)}"
     df["SUPERT"] = st[f"SUPERT_{suffix}"]
     df["SUPERTd"] = st[f"SUPERTd_{suffix}"]
     return df
@@ -384,7 +384,7 @@ def find_option_symbol(master, index, expiry, strike, opt_type):
     row = sub.nsmallest(1, "diff").iloc[0]
     return str(row["tradingsymbol"]), int(row["instrument_token"])
 
-def get_ltp_and_qty(kite, symbol, lot_size, use_margin_pct=0.90):
+def get_ltp_and_qty(kite, symbol, lot_size, use_margin_pct=0.95):
     """
     Get option LTP and calculate dynamic quantity based on available cash.
     """
@@ -504,7 +504,7 @@ while True:
             cprint("Market is open. Scanning for signals...", Fore.GREEN)
 
             # Place your scanning and trading logic here
-            df = fetch_futures_ohlc(kite, INDEX, TIMEFRAME, days=3)
+            df = fetch_futures_ohlc(kite, INDEX, TIMEFRAME, days=15)
             df = calculate_indicators(df)
             df = df.dropna()
             #print(df)

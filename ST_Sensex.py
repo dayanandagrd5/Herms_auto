@@ -35,10 +35,10 @@ TOKEN_FILE  = os.path.join(BASE_DIR, "access_token.json")
 
 INDEX = "SENSEX"
 INDEX_QUOTE = "BSE:SENSEX"
-TIMEFRAME = "5minute"
+TIMEFRAME = "15minute"
 
 start_time = datetime.strptime("09:30:00", "%H:%M:%S").time()
-end_time = datetime.strptime("23:30:00", "%H:%M:%S").time()
+end_time = datetime.strptime("15:30:00", "%H:%M:%S").time()
 exit_time = datetime.strptime("15:15:00", "%H:%M:%S").time()
 
 ST_LENGTH = 7
@@ -48,6 +48,11 @@ IST = ZoneInfo("Asia/Kolkata")
 
 Buy = False
 Sell = False
+
+USE_RETEST = True                  # require price to pull back and touch the ST line before entering
+pending_direction = None           # "BULLISH"/"BEARISH" -- flip seen, waiting for retest
+retest_confirmed_direction = None  # retest seen on the previous bar; enter now if regime holds
+last_processed_bar_ts = None       # timestamp of the last iloc[-2] bar already reacted to
 
 try:
     from colorama import init, Fore, Style
@@ -268,7 +273,7 @@ def get_futures_token(master, index="SENSEX"):
     print(f"   Futures symbol [{index}]: {symbol} | Token: {token}")
     return symbol, token
 
-def fetch_futures_ohlc(kite, index="SENSEX", interval="5minute", days=3):
+def fetch_futures_ohlc(kite, index="SENSEX", interval="5minute", days=15):
     """
     Fetches OHLCV from the front-month futures contract.
     This gives real volume — needed for VWAP calculation.
@@ -367,7 +372,7 @@ def find_option_symbol(master, index, expiry, strike, opt_type):
 
 def calculate_indicators(df):
     st = ta.supertrend(df["high"], df["low"], df["close"], length=ST_LENGTH, multiplier=ST_MULTIPLIER)
-    suffix = f"{ST_LENGTH}_{ST_MULTIPLIER}"
+    suffix = f"{ST_LENGTH}_{float(ST_MULTIPLIER)}"
     df["SUPERT"] = st[f"SUPERT_{suffix}"]
     df["SUPERTd"] = st[f"SUPERTd_{suffix}"]
     return df
@@ -383,7 +388,7 @@ def find_option_symbol(master, index, expiry, strike, opt_type):
     row = sub.nsmallest(1, "diff").iloc[0]
     return str(row["tradingsymbol"]), int(row["instrument_token"])
 
-def get_ltp_and_qty(kite, symbol, lot_size, use_margin_pct=0.90):
+def get_ltp_and_qty(kite, symbol, lot_size, use_margin_pct=0.95):
     """
     Get option LTP and calculate dynamic quantity based on available cash.
     """
@@ -508,7 +513,7 @@ while True:
             cprint("Market is open. Scanning for signals...", Fore.GREEN)
 
             # Place your scanning and trading logic here
-            df = fetch_futures_ohlc(kite, INDEX, TIMEFRAME, days=3)
+            df = fetch_futures_ohlc(kite, INDEX, TIMEFRAME, days=15)
             df = calculate_indicators(df)
             df = df.dropna()
             #print(df)
@@ -539,8 +544,48 @@ while True:
 
             cprint(f"Supertrend: {df.SUPERT.iloc[-2]:.2f} | Trend: {'BULLISH' if df.SUPERTd.iloc[-2] == 1 else 'BEARISH'}", Fore.MAGENTA)
 
-            if df.SUPERTd.iloc[-3] == -1 and df.SUPERTd.iloc[-2] == 1 and Buy == False:
-                    print("Supertrend flipped Bullish - Buy Signal for CE")
+            cur_d  = df.SUPERTd.iloc[-2]
+            prev_d = df.SUPERTd.iloc[-3]
+            last_bar_ts = df.index[-2]
+            new_bar = last_processed_bar_ts is None or last_bar_ts > last_processed_bar_ts
+
+            entered_direction = None
+
+            if USE_RETEST:
+                if new_bar:
+                    if retest_confirmed_direction is not None:
+                        if cur_d == prev_d:
+                            entered_direction = retest_confirmed_direction
+                        retest_confirmed_direction = None
+
+                    if cur_d != prev_d:
+                        direction = "BULLISH" if cur_d == 1 else "BEARISH"
+                        st_val  = df.SUPERT.iloc[-2]
+                        touched = (df.low.iloc[-2] <= st_val) if direction == "BULLISH" else (df.high.iloc[-2] >= st_val)
+                        if touched:
+                            cprint(f"Supertrend flipped {direction} (retest already satisfied @ {st_val:.2f}) - entering next candle", Fore.MAGENTA)
+                            retest_confirmed_direction = direction
+                            pending_direction = None
+                        else:
+                            cprint(f"Supertrend flipped {direction} - waiting for retest of ST line ({st_val:.2f})", Fore.YELLOW)
+                            pending_direction = direction
+                    elif pending_direction is not None:
+                        st_val  = df.SUPERT.iloc[-2]
+                        touched = (df.low.iloc[-2] <= st_val) if pending_direction == "BULLISH" else (df.high.iloc[-2] >= st_val)
+                        if touched:
+                            cprint(f"Retest confirmed for {pending_direction} @ {st_val:.2f} - entering next candle", Fore.MAGENTA)
+                            retest_confirmed_direction = pending_direction
+                            pending_direction = None
+
+                    last_processed_bar_ts = last_bar_ts
+            else:
+                if cur_d == 1 and prev_d == -1:
+                    entered_direction = "BULLISH"
+                elif cur_d == -1 and prev_d == 1:
+                    entered_direction = "BEARISH"
+
+            if entered_direction == "BULLISH" and Buy == False:
+                    print("Supertrend flip confirmed - Buy Signal for CALL")
 
                     if Sell == True:
                         cprint(f"Trailing exit (ST flip) - placing sell order for {Traded_symbol}...", Fore.GREEN)
@@ -553,8 +598,8 @@ while True:
                     Buy = True
                     Traded_quanity = CE_qty
 
-            elif df.SUPERTd.iloc[-3] == 1 and df.SUPERTd.iloc[-2] == -1 and Sell == False:
-                    print("Supertrend flipped Bearish - Buy Signal for PE")
+            elif entered_direction == "BEARISH" and Sell == False:
+                    print("Supertrend flip confirmed - Buy Signal for PUT")
 
                     if Buy == True:
                         cprint(f"Trailing exit (ST flip) - placing sell order for {Traded_symbol}...", Fore.GREEN)
@@ -567,7 +612,7 @@ while True:
                     Sell = True
                     Traded_quanity = PE_qty
 
-            elif current_time >= exit_time:
+            if current_time >= exit_time:
                     cprint("Market is about to close. Exiting any open positions...", Fore.RED)
                     if Buy == True:
                         sell_order(Traded_symbol, Traded_quanity)
