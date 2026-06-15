@@ -37,8 +37,8 @@ INDEX = "NIFTY"
 INDEX_QUOTE = "NSE:NIFTY 50"
 TIMEFRAME = "5minute"
 
-start_time = datetime.strptime("09:30:00", "%H:%M:%S").time()
-end_time = datetime.strptime("23:30:00", "%H:%M:%S").time()
+start_time = datetime.strptime("09:15:00", "%H:%M:%S").time()
+end_time = datetime.strptime("15:30:00", "%H:%M:%S").time()
 exit_time = datetime.strptime("15:15:00", "%H:%M:%S").time()
 
 ST_LENGTH = 7
